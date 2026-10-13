@@ -1,15 +1,15 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 // Browser-only simulation is development-only; production must use the API.
 const DEMO_MODE = import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE !== 'false';
 const now = new Date();
-const dateAt = (offset, hour) => { const d = new Date(now); d.setDate(d.getDate()+offset); d.setHours(hour,0,0,0); return d.toISOString(); };
+const dateAt = (offset, hour) => { const d = new Date(now); d.setDate(d.getDate() + offset); d.setHours(hour, 0, 0, 0); return d.toISOString(); };
 let demoSessions = [
-  { id:'demo-s1', title:'Strength Foundations', program:'strength', coach:'Coach A', startAt:dateAt(0,17), capacity:20, booked:14 },
-  { id:'demo-s2', title:'Engine Room', program:'conditioning', coach:'Coach B', startAt:dateAt(0,18), capacity:20, booked:20 },
-  { id:'demo-s3', title:'HIIT — 40/20', program:'hiit', coach:'Coach C', startAt:dateAt(0,19), capacity:20, booked:11 },
-  { id:'demo-s4', title:'Strength Foundations', program:'strength', coach:'Coach A', startAt:dateAt(1,7), capacity:20, booked:8 },
-  { id:'demo-s5', title:'Mobility Reset', program:'mobility', coach:'Coach D', startAt:dateAt(1,18), capacity:20, booked:5 },
-  { id:'demo-s6', title:'Personal Coaching', program:'personal-training', coach:'Coach E', startAt:dateAt(2,17), capacity:20, booked:19 },
+  { id: 'demo-s1', title: 'Strength Foundations', program: 'strength', coach: 'Coach A', startAt: dateAt(0, 17), capacity: 20, booked: 14 },
+  { id: 'demo-s2', title: 'Engine Room', program: 'conditioning', coach: 'Coach B', startAt: dateAt(0, 18), capacity: 20, booked: 20 },
+  { id: 'demo-s3', title: 'HIIT — 40/20', program: 'hiit', coach: 'Coach C', startAt: dateAt(0, 19), capacity: 20, booked: 11 },
+  { id: 'demo-s4', title: 'Strength Foundations', program: 'strength', coach: 'Coach A', startAt: dateAt(1, 7), capacity: 20, booked: 8 },
+  { id: 'demo-s5', title: 'Mobility Reset', program: 'mobility', coach: 'Coach D', startAt: dateAt(1, 18), capacity: 20, booked: 5 },
+  { id: 'demo-s6', title: 'Personal Coaching', program: 'personal-training', coach: 'Coach E', startAt: dateAt(2, 17), capacity: 20, booked: 19 },
 ];
 const readStored = (key, fallback) => { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch { return fallback; } };
 const saveStored = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage can be unavailable in private browsing */ } };
@@ -248,8 +248,8 @@ export async function getMyBookings() {
 }
 
 export async function cancelBooking(id) {
-  if (DEMO_MODE) { const user=getCurrentUser(); const b=demoBookings.find(x=>x.id===id && x.userId===user?.id); if(!b) throw new Error('Booking not found.'); if(b.status!=='CONFIRMED') throw new Error('This booking cannot be cancelled.'); b.status='CANCELLED'; const s=demoSessions.find(x=>x.id===b.sessionId); if(s) s.booked=Math.max(0,s.booked-1); saveStored('fitbro_demo_bookings', demoBookings); saveStored('fitbro_demo_sessions', demoSessions); return { data:b }; }
-  return request(`/bookings/${id}`,{method:'DELETE'});
+  if (DEMO_MODE) { const user = getCurrentUser(); const b = demoBookings.find(x => x.id === id && x.userId === user?.id); if (!b) throw new Error('Booking not found.'); if (b.status !== 'CONFIRMED') throw new Error('This booking cannot be cancelled.'); b.status = 'CANCELLED'; const s = demoSessions.find(x => x.id === b.sessionId); if (s) s.booked = Math.max(0, s.booked - 1); saveStored('fitbro_demo_bookings', demoBookings); saveStored('fitbro_demo_sessions', demoSessions); return { data: b }; }
+  return request(`/bookings/${id}`, { method: 'DELETE' });
 }
 
 export async function getAdminSessions() {
@@ -329,12 +329,17 @@ export async function createSession(payload) {
     `T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:00` +
     `${sign}${offsetHours}:${offsetMins}`;
 
+
   return request('/sessions', {
     method: 'POST',
     body: JSON.stringify({
+      title: payload.title,
+      program: payload.program,
+      coach: payload.coach || '',
       startAt: localStartAt,
     }),
   });
+
 }
 
 export async function checkIn(sessionId, code) {
@@ -388,4 +393,46 @@ export async function getSessionBookings(sessionId) {
   return { ...result, data: bookings };
 }
 
-export function getCurrentUser() { try { return JSON.parse(localStorage.getItem('fitbro_user')||'null'); } catch { return null; } }
+export function getCurrentUser() { try { return JSON.parse(localStorage.getItem('fitbro_user') || 'null'); } catch { return null; } }
+
+
+export async function getSessionWaitlist(sessionId) {
+  if (DEMO_MODE) {
+    const entries = demoWaitlist
+      .filter((entry) => entry.sessionId === sessionId)
+      .map((entry, index) => ({
+        ...entry,
+        name: `Demo Member ${index + 1}`,
+        email: `member${index + 1}@example.test`,
+        status: 'WAITING',
+        joinedAt: new Date().toISOString(),
+        queuePosition: index + 1,
+      }));
+
+    return { data: entries };
+  }
+
+  const result = await request(`/sessions/${sessionId}/waitlist`);
+  const entries = Array.isArray(result.data?.waitlist)
+    ? result.data.waitlist
+    : [];
+
+  return { ...result, data: entries };
+}
+
+export async function firebaseLogin(idToken) {
+  if (!idToken) throw new Error("Firebase ID token is missing.");
+
+  const result = await request("/auth/firebase", {
+    method: "POST",
+    body: JSON.stringify({ idToken }),
+  });
+
+  const payload = result.data ?? result;
+
+  if (!payload.token || !payload.user) {
+    throw new Error("The server did not return a valid FIT_BRO session.");
+  }
+
+  return payload;
+}

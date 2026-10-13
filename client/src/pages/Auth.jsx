@@ -1,7 +1,17 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowUpRight, Eye, EyeOff, ShieldCheck } from 'lucide-react';
-import { apiMode, login, register } from '../services/api.js';
+import { ArrowUpRight, Eye, EyeOff, ShieldCheck, Phone } from 'lucide-react';
+import { apiMode, login, register, firebaseLogin } from '../services/api.js';
+import PhoneInput from 'react-phone-number-input';
+import 'react-phone-number-input/style.css';
+import '../styles/phone-input.css';
+import {
+  GoogleAuthProvider,
+  signInWithPopup,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+} from 'firebase/auth';
+import { firebaseAuth } from '../config/firebase.js';
 
 export default function Auth({ mode }) {
   const isRegister = mode === 'register';
@@ -11,6 +21,10 @@ export default function Auth({ mode }) {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [phone, setPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
+  const [otpSent, setOtpSent] = useState(false);
   const [cordPull, setCordPull] = useState(0);
   const dragStartY = useRef(null);
   const pullDistance = useRef(0);
@@ -47,6 +61,86 @@ export default function Auth({ mode }) {
     dragged.current = false;
   }
 
+  async function finishFirebaseSignIn(firebaseUser) {
+    const idToken = await firebaseUser.getIdToken();
+    const result = await firebaseLogin(idToken);
+
+    localStorage.setItem('fitbro_token', result.token);
+    localStorage.setItem('fitbro_user', JSON.stringify(result.user));
+    window.dispatchEvent(new Event('fitbro-auth-change'));
+    navigate('/sessions');
+  }
+
+  async function signInWithGoogle() {
+    setError('');
+    setBusy(true);
+
+    try {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(firebaseAuth, provider);
+      await finishFirebaseSignIn(result.user);
+    } catch (err) {
+      setError(err.message || 'Google sign-in failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendPhoneOtp(event) {
+    event.preventDefault();
+    setError('');
+
+    if (!/^\+[1-9]\d{7,14}$/.test(phone.trim())) {
+      setError('Enter your phone number with country code, e.g. +919876543210.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      if (!window.fitbroRecaptchaVerifier) {
+        window.fitbroRecaptchaVerifier = new RecaptchaVerifier(
+          firebaseAuth,
+          'fitbro-recaptcha',
+          { size: 'normal' }
+        );
+      }
+
+      const confirmationResult = await signInWithPhoneNumber(
+        firebaseAuth,
+        phone.trim(),
+        window.fitbroRecaptchaVerifier
+      );
+
+      setConfirmation(confirmationResult);
+      setOtpSent(true);
+    } catch (err) {
+      window.fitbroRecaptchaVerifier?.clear?.();
+      window.fitbroRecaptchaVerifier = null;
+      setError(err.message || 'Could not send the verification code.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyPhoneOtp(event) {
+    event.preventDefault();
+    setError('');
+
+    if (!confirmation || !/^\d{6}$/.test(otp.trim())) {
+      setError('Enter the 6-digit verification code sent to your phone.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await confirmation.confirm(otp.trim());
+      await finishFirebaseSignIn(result.user);
+    } catch (err) {
+      setError(err.message || 'Phone verification failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
   async function submit(event) {
     event.preventDefault();
     setError('');
@@ -117,6 +211,61 @@ export default function Auth({ mode }) {
             <div className="lamp-preview-note">Preview mode · Any valid email and password works. Use admin@fitbro.local for the admin preview.</div>
           )}
 
+          <div className="lamp-social-auth">
+
+            <div className="lamp-form-group">
+              <label htmlFor="firebase-phone">Phone number with country code</label>
+              <PhoneInput
+                id="firebase-phone"
+                international
+                defaultCountry="IN"
+                value={phone}
+                onChange={setPhone}
+                disabled={busy || otpSent}
+                placeholder="Enter mobile number"
+                aria-label="Phone number"
+              />
+            </div>
+
+            {!otpSent ? (
+
+              <button
+                className="lamp-submit"
+                type="button"
+                disabled={busy}
+                onClick={sendPhoneOtp}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '10px',
+                }}
+              >
+                <Phone size={19} strokeWidth={2.2} aria-hidden="true" />
+                <span>{busy ? 'PLEASE WAIT...' : 'Send phone OTP'}</span>
+              </button>
+
+            ) : (
+              <form onSubmit={verifyPhoneOtp}>
+                <div className="lamp-form-group">
+                  <label htmlFor="firebase-otp">6-digit verification code</label>
+                  <input
+                    id="firebase-otp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={otp}
+                    onChange={(event) => setOtp(event.target.value)}
+                    maxLength={6}
+                  />
+                </div>
+                <button className="lamp-submit" type="submit" disabled={busy || otp.trim().length !== 6}>
+                  Verify OTP
+                </button>
+              </form>
+            )}
+
+            <div id="fitbro-recaptcha" />
+          </div>
           <form onSubmit={submit} noValidate>
             {isRegister && (
               <div className="lamp-form-group">
@@ -148,6 +297,37 @@ export default function Auth({ mode }) {
             {isRegister ? 'Already a member?' : 'New to FIT_BRO?'}{' '}
             <Link to={isRegister ? '/login' : '/register'}>{isRegister ? 'Sign in' : 'Create account'} <ArrowUpRight size={13} /></Link>
           </p>
+          <button
+              className="lamp-submit"
+              type="button"
+              disabled={busy}
+              onClick={signInWithGoogle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px',
+              }}
+            >
+              {busy ? (
+                'PLEASE WAIT...'
+              ) : (
+                <>
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 48 48"
+                    aria-hidden="true"
+                  >
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" />
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.73 7.18l7.64 5.93c4.46-4.13 7.13-10.2 7.13-17.58Z" />
+                    <path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.87.93 7.52 2.56 10.78l7.97-6.19Z" />
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.85-5.87l-7.64-5.93c-2.12 1.42-4.83 2.27-8.21 2.27-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" />
+                  </svg>
+                  <span>Continue with Google</span>
+                </>
+              )}
+            </button>
         </section>
       </div>
     </div>
