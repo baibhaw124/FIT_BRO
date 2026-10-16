@@ -15,11 +15,21 @@ import {
 dotenv.config();
 
 const app = express();
+const allowedOrigins = [
+  "https://fit-bro-delta.vercel.app",
+  "https://fit-bro-git-main-team-baibhaw.vercel.app",
+  "http://localhost:5173",
+];
 
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:5173",
-}));
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
 
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
+}));
 app.use(express.json({ limit: "20kb" }));
 
 app.get("/api/health", (req, res) => {
